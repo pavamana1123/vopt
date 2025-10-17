@@ -186,11 +186,6 @@ foreach ($file in $videoFiles) {
     Add-Content -Path $voptFile -Value $file.FullName
 }
 
-if (Test-Path $voptFile) {
-    Remove-Item $voptFile -Force
-    Write-Host "`n🧹 Cleanup: Removed .vopt file"
-}
-
 # Summary
 function Get-DirSize([string]$path, [string[]]$filterExt, [string[]]$excludeFolders) {
     Get-ChildItem -Path $path -Recurse -File | Where-Object {
