@@ -22,7 +22,7 @@ if ($help -or -not $i) {
     Show-Usage
 }
 
-# Normalize paths to absolute
+# Normalize input path to absolute
 try {
     $InputDir = (Resolve-Path -LiteralPath $i).Path
 }
@@ -31,12 +31,12 @@ catch {
     exit 1
 }
 
+# Output directory handling
 if ($o) {
     try {
         $OutputDir = (Resolve-Path -LiteralPath $o).Path
     }
     catch {
-        # If output dir does not exist yet, create it later
         $OutputDir = $o
     }
 }
@@ -76,7 +76,9 @@ foreach ($file in $videoFiles) {
 
     $inFile = $file.FullName
     $name = $file.BaseName
+    $srcExt = $file.Extension
     $outFile = Join-Path $OutputDir "$name.mp4"
+    $fallbackOutFile = Join-Path $OutputDir "$name$srcExt"
 
     Write-Host "`n⏳ Processing $($currentIndex) of $($totalFiles): $($file.Name)"
 
@@ -168,11 +170,12 @@ foreach ($file in $videoFiles) {
 
     if (-not $needsResize -and -not $needsBitrateChange) {
         Write-Host "🟡 Skipping: $($file.Name) (no resize ($($trueWidth)x$($trueHeight)) or bitrate ($($bitrate)) change needed), copying anyway!"
-        Copy-Item $inFile $outFile
+        Copy-Item $inFile $fallbackOutFile -Force
         Add-Content -Path $voptFile -Value $file.FullName
         continue
     }
 
+    # Run ffmpeg
     if ($needsResize) {
         Write-Host "🔄 Resizing: $($file.Name) → $newWidth x $newHeight @ 10 Mbps"
         ffmpeg -hide_banner -loglevel error -stats -y -i "$inFile" -vf "scale=$($newWidth):$($newHeight)" -b:v 10M -c:a copy "$outFile"
@@ -180,6 +183,20 @@ foreach ($file in $videoFiles) {
     elseif ($needsBitrateChange) {
         Write-Host "📉 Reducing bitrate: $($file.Name) → 10 Mbps (no resize)"
         ffmpeg -hide_banner -loglevel error -stats -y -i "$inFile" -b:v 10M -c:a copy "$outFile"
+    }
+
+    # 🔒 SAFETY CHECK: If output file is zero bytes, fallback to copying source
+    if (-not (Test-Path $outFile) -or (Get-Item $outFile).Length -eq 0) {
+        Write-Host "❌ Conversion produced empty file. Using source instead."
+        if (Test-Path $outFile) {
+            Remove-Item $outFile -Force
+        }
+
+        Copy-Item $inFile $fallbackOutFile -Force
+        Write-Host "📁 Source file copied as: $fallbackOutFile"
+    }
+    else {
+        Write-Host "✅ Output verified (non-zero file size)."
     }
 
     Write-Host "✅ Done: $($file.Name)"
