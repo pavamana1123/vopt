@@ -22,7 +22,9 @@ if ($help -or -not $i) {
     Show-Usage
 }
 
-# Normalize input path to absolute
+
+
+# Normalize paths to absolute
 try {
     $InputDir = (Resolve-Path -LiteralPath $i).Path
 }
@@ -31,17 +33,34 @@ catch {
     exit 1
 }
 
-# Output directory handling
 if ($o) {
     try {
         $OutputDir = (Resolve-Path -LiteralPath $o).Path
     }
     catch {
+        # If output dir does not exist yet, create it later
         $OutputDir = $o
     }
 }
 else {
     $OutputDir = Join-Path $InputDir "comp"
+}
+
+# ---- SAFETY CHECK: Input and Output must not be the same ----
+try {
+    $resolvedInput  = (Resolve-Path -LiteralPath $InputDir).Path
+    $resolvedOutput = (Resolve-Path -LiteralPath $OutputDir -ErrorAction Stop).Path
+}
+catch {
+    # Output dir may not exist yet; resolve parent
+    $resolvedOutput = (Resolve-Path -LiteralPath (Split-Path $OutputDir -Parent)).Path
+}
+
+if ($resolvedInput.TrimEnd('\') -eq $resolvedOutput.TrimEnd('\')) {
+    Write-Error "❌ Input and Output directories resolve to the SAME path. This is not allowed."
+    Write-Error "   Input : $resolvedInput"
+    Write-Error "   Output: $resolvedOutput"
+    exit 1
 }
 
 # Ensure output directory exists
@@ -76,9 +95,7 @@ foreach ($file in $videoFiles) {
 
     $inFile = $file.FullName
     $name = $file.BaseName
-    $srcExt = $file.Extension
     $outFile = Join-Path $OutputDir "$name.mp4"
-    $fallbackOutFile = Join-Path $OutputDir "$name$srcExt"
 
     Write-Host "`n⏳ Processing $($currentIndex) of $($totalFiles): $($file.Name)"
 
@@ -170,12 +187,11 @@ foreach ($file in $videoFiles) {
 
     if (-not $needsResize -and -not $needsBitrateChange) {
         Write-Host "🟡 Skipping: $($file.Name) (no resize ($($trueWidth)x$($trueHeight)) or bitrate ($($bitrate)) change needed), copying anyway!"
-        Copy-Item $inFile $fallbackOutFile -Force
+        Copy-Item $inFile $outFile
         Add-Content -Path $voptFile -Value $file.FullName
         continue
     }
 
-    # Run ffmpeg
     if ($needsResize) {
         Write-Host "🔄 Resizing: $($file.Name) → $newWidth x $newHeight @ 10 Mbps"
         ffmpeg -hide_banner -loglevel error -stats -y -i "$inFile" -vf "scale=$($newWidth):$($newHeight)" -b:v 10M -c:a copy "$outFile"
@@ -185,22 +201,13 @@ foreach ($file in $videoFiles) {
         ffmpeg -hide_banner -loglevel error -stats -y -i "$inFile" -b:v 10M -c:a copy "$outFile"
     }
 
-    # 🔒 SAFETY CHECK: If output file is zero bytes, fallback to copying source
-    if (-not (Test-Path $outFile) -or (Get-Item $outFile).Length -eq 0) {
-        Write-Host "❌ Conversion produced empty file. Using source instead."
-        if (Test-Path $outFile) {
-            Remove-Item $outFile -Force
-        }
-
-        Copy-Item $inFile $fallbackOutFile -Force
-        Write-Host "📁 Source file copied as: $fallbackOutFile"
-    }
-    else {
-        Write-Host "✅ Output verified (non-zero file size)."
-    }
-
     Write-Host "✅ Done: $($file.Name)"
     Add-Content -Path $voptFile -Value $file.FullName
+}
+
+if (Test-Path $voptFile) {
+    Remove-Item $voptFile -Force
+    Write-Host "`n🧹 Cleanup: Removed .vopt file"
 }
 
 # Summary
