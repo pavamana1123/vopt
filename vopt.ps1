@@ -1,30 +1,35 @@
 param (
-    [string]$i,                        # Input directory
-    [string]$o,                        # Output directory
+    [Parameter(Position = 0)]
+    [string]$i,                        # Input directory (defaults to current directory if omitted)
+    [Parameter(Position = 1)]
+    [string]$o,                        # Output directory (defaults to <InputDirectory>\comp)
     [switch]$skipOrienCheck,           # Skip orientation metadata check
     [switch]$help                      # Show usage/help
 )
 
 function Show-Usage {
     Write-Host "Usage:"
-    Write-Host "  vopt -i <InputDirectory> [-o <OutputDirectory>] [-skipOrienCheck] [-help]"
+    Write-Host "  vopt [[-i] <InputDirectory>] [[-o] <OutputDirectory>] [-skipOrienCheck] [-help]"
     Write-Host ""
     Write-Host "Options:"
-    Write-Host "  -i <InputDirectory>       Input folder containing videos (required)"
+    Write-Host "  -i <InputDirectory>       Input folder containing videos (default: current directory)"
     Write-Host "  -o <OutputDirectory>      Output folder (default: <InputDirectory>\comp)"
     Write-Host "  -skipOrienCheck           Skip checking orientation/rotation metadata"
     Write-Host "  -help                     Show this help message"
     exit 0
 }
 
-# Show help if requested or no input
-if ($help -or -not $i) {
+# Show help if requested
+if ($help) {
     Show-Usage
 }
 
+# Default input directory to current working directory if not specified
+if (-not $i) {
+    $i = (Get-Location).Path
+}
 
-
-# Normalize paths to absolute
+# Normalize input path to absolute
 try {
     $InputDir = (Resolve-Path -LiteralPath $i).Path
 }
@@ -33,40 +38,35 @@ catch {
     exit 1
 }
 
+# Determine output directory
 if ($o) {
-    try {
+    if (Test-Path -LiteralPath $o) {
         $OutputDir = (Resolve-Path -LiteralPath $o).Path
     }
-    catch {
-        # If output dir does not exist yet, create it later
-        $OutputDir = $o
+    else {
+        $OutputDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($o)
     }
 }
 else {
     $OutputDir = Join-Path $InputDir "comp"
 }
 
-# ---- SAFETY CHECK: Input and Output must not be the same ----
-try {
-    $resolvedInput  = (Resolve-Path -LiteralPath $InputDir).Path
-    $resolvedOutput = (Resolve-Path -LiteralPath $OutputDir -ErrorAction Stop).Path
-}
-catch {
-    # Output dir may not exist yet; resolve parent
-    $resolvedOutput = (Resolve-Path -LiteralPath (Split-Path $OutputDir -Parent)).Path
+# Ensure output directory exists (create it if not present)
+if (-not (Test-Path -LiteralPath $OutputDir)) {
+    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+    Write-Host "📁 Created output directory: $OutputDir"
 }
 
-if ($resolvedInput.TrimEnd('\') -eq $resolvedOutput.TrimEnd('\')) {
+# Resolve paths to canonical forms for safety comparison
+$resolvedInput  = (Resolve-Path -LiteralPath $InputDir).Path
+$resolvedOutput = (Resolve-Path -LiteralPath $OutputDir).Path
+
+# ---- SAFETY CHECK: Input and Output must not be the same ----
+if ($resolvedInput.TrimEnd('\', '/') -ieq $resolvedOutput.TrimEnd('\', '/')) {
     Write-Error "❌ Input and Output directories resolve to the SAME path. This is not allowed."
     Write-Error "   Input : $resolvedInput"
     Write-Error "   Output: $resolvedOutput"
     exit 1
-}
-
-# Ensure output directory exists
-if (-not (Test-Path $OutputDir)) {
-    New-Item -ItemType Directory -Path $OutputDir | Out-Null
-    Write-Host "📁 Created output directory: $OutputDir"
 }
 
 # File to track processed videos
@@ -78,7 +78,7 @@ if (Test-Path $voptFile) {
 
 # Supported video extensions
 $extensions = '.mp4', '.mov', '.mts', '.mkv', '.avi', '.m4v', '.mpeg', '.mpg', '.wmv',
-'.webm', '.flv', '.3gp', '.ts', '.vob', '.rm', '.rmvb', '.m2ts', '.f4v', '.asf'
+'.webm', '.flv', '.3gp', '.ts', '.vob', '.rm', '.rmvb', '.m2ts', '.f4v', '.asf', '.mxf'
 
 # Collect video files
 $videoFiles = Get-ChildItem -Path $InputDir -File | Where-Object { $extensions -contains $_.Extension.ToLower() }
@@ -186,8 +186,14 @@ foreach ($file in $videoFiles) {
     }
 
     if (-not $needsResize -and -not $needsBitrateChange) {
-        Write-Host "🟡 Skipping: $($file.Name) (no resize ($($trueWidth)x$($trueHeight)) or bitrate ($($bitrate)) change needed), copying anyway!"
-        Copy-Item $inFile $outFile
+        if ($file.Extension.ToLower() -eq '.mp4') {
+            Write-Host "🟡 Skipping: $($file.Name) (no resize ($($trueWidth)x$($trueHeight)) or bitrate ($($bitrate)) change needed), copying anyway!"
+            Copy-Item $inFile $outFile
+        }
+        else {
+            Write-Host "🔄 Converting: $($file.Name) → MP4 (no resize or bitrate change needed)"
+            ffmpeg -hide_banner -loglevel error -stats -y -i "$inFile" -b:v 10M -c:a copy "$outFile"
+        }
         Add-Content -Path $voptFile -Value $file.FullName
         continue
     }
@@ -205,9 +211,9 @@ foreach ($file in $videoFiles) {
     Add-Content -Path $voptFile -Value $file.FullName
 }
 
+# Retain .vopt file as a record of completed conversions
 if (Test-Path $voptFile) {
-    Remove-Item $voptFile -Force
-    Write-Host "`n🧹 Cleanup: Removed .vopt file"
+    Write-Host "`n📝 Conversion record preserved in: $voptFile"
 }
 
 # Summary
