@@ -54,7 +54,7 @@ else {
 # Ensure output directory exists (create it if not present)
 if (-not (Test-Path -LiteralPath $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-    Write-Host "📁 Created output directory: $OutputDir"
+    Write-Host "[DIR] Created output directory: $OutputDir"
 }
 
 # Resolve paths to canonical forms for safety comparison
@@ -63,9 +63,9 @@ $resolvedOutput = (Resolve-Path -LiteralPath $OutputDir).Path
 
 # ---- SAFETY CHECK: Input and Output must not be the same ----
 if ($resolvedInput.TrimEnd('\', '/') -ieq $resolvedOutput.TrimEnd('\', '/')) {
-    Write-Error "❌ Input and Output directories resolve to the SAME path. This is not allowed."
-    Write-Error "   Input : $resolvedInput"
-    Write-Error "   Output: $resolvedOutput"
+    Write-Error "[ERROR] Input and Output directories resolve to the SAME path. This is not allowed."
+    Write-Error "        Input : $resolvedInput"
+    Write-Error "        Output: $resolvedOutput"
     exit 1
 }
 
@@ -89,7 +89,7 @@ foreach ($file in $videoFiles) {
     $currentIndex++
 
     if ($processedFiles -contains $file.FullName) {
-        Write-Host "⏭️  Skipping already processed: $($file.Name)"
+        Write-Host "[SKIP] Already processed: $($file.Name)"
         continue
     }
 
@@ -97,14 +97,14 @@ foreach ($file in $videoFiles) {
     $name = $file.BaseName
     $outFile = Join-Path $OutputDir "$name.mp4"
 
-    Write-Host "`n⏳ Processing $($currentIndex) of $($totalFiles): $($file.Name)"
+    Write-Host "`n[$currentIndex/$totalFiles] Processing: $($file.Name)"
 
     # Resolution + bitrate
     $resInfo = ffprobe -v error -select_streams v:0 -show_entries stream="width,height,bit_rate" -of csv=p=0 "$inFile"
     $resParts = $resInfo -split ',' | ForEach-Object { $_.Trim() }
 
     if ($resParts.Count -lt 2) {
-        Write-Host "⚠️ Skipping (could not parse resolution): $($file.Name)"
+        Write-Host "[WARN] Skipping (could not parse resolution): $($file.Name)"
         continue
     }
 
@@ -121,7 +121,7 @@ foreach ($file in $videoFiles) {
             $bitrate = [int]$formatBitrate
         }
         else {
-            Write-Host "⚠️ Could not determine bitrate, assuming 0: $($file.Name)"
+            Write-Host "[WARN] Could not determine bitrate, assuming 0: $($file.Name)"
             $bitrate = 0
         }
     }
@@ -152,7 +152,7 @@ foreach ($file in $videoFiles) {
 
     $orientation = if ($trueWidth -gt $trueHeight) { 'landscape' } elseif ($trueHeight -gt $trueWidth) { 'portrait' } else { 'square' }
     if (-not $skipOrienCheck) {
-        Write-Host "🧭 Detected orientation: $orientation (rotation: $($rotation -ne '' ? $rotation : 'none'))"
+        Write-Host "[INFO] Detected orientation: $orientation (rotation: $($rotation -ne '' ? $rotation : 'none'))"
     }
 
     # Resize/bitrate logic
@@ -187,11 +187,11 @@ foreach ($file in $videoFiles) {
 
     if (-not $needsResize -and -not $needsBitrateChange) {
         if ($file.Extension.ToLower() -eq '.mp4') {
-            Write-Host "🟡 Skipping: $($file.Name) (no resize ($($trueWidth)x$($trueHeight)) or bitrate ($($bitrate)) change needed), copying anyway!"
+            Write-Host "[SKIP] $($file.Name) (no resize (${trueWidth}x${trueHeight}) or bitrate ($bitrate) change needed), copying..."
             Copy-Item $inFile $outFile
         }
         else {
-            Write-Host "🔄 Converting: $($file.Name) → MP4 (no resize or bitrate change needed)"
+            Write-Host "[CONVERT] $($file.Name) -> MP4 (no resize or bitrate change needed)"
             ffmpeg -hide_banner -loglevel error -stats -y -i "$inFile" -b:v 10M -c:a copy "$outFile"
         }
         Add-Content -Path $voptFile -Value $file.FullName
@@ -199,32 +199,38 @@ foreach ($file in $videoFiles) {
     }
 
     if ($needsResize) {
-        Write-Host "🔄 Resizing: $($file.Name) → $newWidth x $newHeight @ 10 Mbps"
+        Write-Host "[RESIZE] $($file.Name) -> $newWidth x $newHeight @ 10 Mbps"
         ffmpeg -hide_banner -loglevel error -stats -y -i "$inFile" -vf "scale=$($newWidth):$($newHeight)" -b:v 10M -c:a copy "$outFile"
     }
     elseif ($needsBitrateChange) {
-        Write-Host "📉 Reducing bitrate: $($file.Name) → 10 Mbps (no resize)"
+        Write-Host "[BITRATE] $($file.Name) -> 10 Mbps (no resize)"
         ffmpeg -hide_banner -loglevel error -stats -y -i "$inFile" -b:v 10M -c:a copy "$outFile"
     }
 
-    Write-Host "✅ Done: $($file.Name)"
+    Write-Host "[DONE] $($file.Name)"
     Add-Content -Path $voptFile -Value $file.FullName
 }
 
 # Retain .vopt file as a record of completed conversions
 if (Test-Path $voptFile) {
-    Write-Host "`n📝 Conversion record preserved in: $voptFile"
+    Write-Host "`n[RECORD] Conversion record preserved in: $voptFile"
 }
 
 # Summary
 function Get-DirSize([string]$path, [string[]]$filterExt, [string[]]$excludeFolders) {
-    Get-ChildItem -Path $path -Recurse -File | Where-Object {
+    $matched = Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
         $filterExt -contains $_.Extension.ToLower() -and
         ($excludeFolders -notcontains $_.Directory.Name)
-    } | Measure-Object -Property Length -Sum | Select-Object -ExpandProperty Sum
+    }
+    if ($matched) {
+        ($matched | Measure-Object -Property Length -Sum).Sum
+    }
+    else {
+        0
+    }
 }
 
-$exclude = @("comp")
+$exclude = @("comp", "img", "vid", (Split-Path $OutputDir -Leaf))
 $srcSize = Get-DirSize $InputDir $extensions $exclude
 $dstSize = Get-DirSize $OutputDir $extensions @()
 
@@ -233,7 +239,8 @@ $dstSizeMB = [math]::Round($dstSize / 1MB, 2)
 $savedMB = [math]::Round(($srcSize - $dstSize) / 1MB, 2)
 $savedPercent = if ($srcSize -gt 0) { [math]::Round((($srcSize - $dstSize) / $srcSize) * 100, 1) } else { 0 }
 
-Write-Host "`n📊 Optimization Summary:"
-Write-Host "📦 Source size: $srcSizeMB MB"
-Write-Host "🎯 Output size: $dstSizeMB MB"
-Write-Host "💾 Space saved: $savedMB MB ($savedPercent%)"
+Write-Host "`n================ Video Optimization Summary ================"
+Write-Host "Source directory size : $srcSizeMB MB"
+Write-Host "Output directory size : $dstSizeMB MB"
+Write-Host "Total space saved     : $savedMB MB ($savedPercent%)"
+Write-Host "============================================================"

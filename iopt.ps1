@@ -190,7 +190,7 @@ function Get-DirSize([string]$path, [string[]]$filterExt, [string[]]$excludeFold
     }
 }
 
-$exclude = @("comp")
+$exclude = @("comp", "img", "vid", (Split-Path $OutputDir -Leaf))
 $srcSize = Get-DirSize $InputDir $extensions $exclude
 $dstSize = Get-DirSize $OutputDir $extensions @()
 

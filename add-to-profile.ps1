@@ -1,10 +1,11 @@
 <#
 .SYNOPSIS
-    Adds or updates the 'vopt' and 'iopt' command functions in the user's PowerShell profile ($PROFILE).
+    Adds or updates the 'vopt', 'iopt', and 'opt' command functions in the user's PowerShell profile ($PROFILE).
 #>
 
 $voptPath = Join-Path $PSScriptRoot "vopt.ps1"
 $ioptPath = Join-Path $PSScriptRoot "iopt.ps1"
+$optPath  = Join-Path $PSScriptRoot "opt.ps1"
 
 if (-not (Test-Path -LiteralPath $voptPath)) {
     Write-Error "[ERROR] Could not find vopt.ps1 at: $voptPath"
@@ -13,6 +14,11 @@ if (-not (Test-Path -LiteralPath $voptPath)) {
 
 if (-not (Test-Path -LiteralPath $ioptPath)) {
     Write-Error "[ERROR] Could not find iopt.ps1 at: $ioptPath"
+    exit 1
+}
+
+if (-not (Test-Path -LiteralPath $optPath)) {
+    Write-Error "[ERROR] Could not find opt.ps1 at: $optPath"
     exit 1
 }
 
@@ -60,6 +66,7 @@ function $CmdName {
 
 Add-Or-Update-Command -CmdName "vopt" -CmdScriptPath $voptPath -FilePath $profilePath
 Add-Or-Update-Command -CmdName "iopt" -CmdScriptPath $ioptPath -FilePath $profilePath
+Add-Or-Update-Command -CmdName "opt"  -CmdScriptPath $optPath  -FilePath $profilePath
 
-Write-Host "`nTo start using 'vopt' and 'iopt' right away in your current session, run:"
+Write-Host "`nTo start using 'vopt', 'iopt', and 'opt' right away in your current session, run:"
 Write-Host "  . `$PROFILE" -ForegroundColor Cyan
